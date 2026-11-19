@@ -123,6 +123,10 @@ button{color:#12002b}
 .c4 .cell.drop{animation:cdrop .55s cubic-bezier(.5,0,.8,.6)}
 @media (prefers-reduced-motion:reduce){.pc.mv,.gh,.sq.hit,.cb.shake,.cell.pop,.cell.drop{animation:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.pr{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.pcode{font-family:"Bungee",Impact,sans-serif;font-size:clamp(34px,11vw,52px);letter-spacing:6px;text-align:center;color:#ffd23f;text-shadow:3px 3px 0 #000}
+.pmsg{text-align:center;color:#ffb3d9;min-height:0;margin-top:6px;font-weight:700}
+#partyIn{text-transform:uppercase;letter-spacing:3px}
 </style>
 </head>
 <body>
@@ -132,6 +136,20 @@ button{color:#12002b}
 <div class="top">
   <span class="live" id="live"><span class="dot"></span><span id="status">Connecting</span></span>
   <div class="stack" id="stack"></div>
+</div>
+
+<div class="box party" id="partyBox">
+  <div id="partyOff">
+    <div class="banner" style="min-height:0;margin-bottom:10px">🎉 Party</div>
+    <div class="pr"><button id="partyCreate">Create party</button></div>
+    <div class="pr" style="margin-top:12px"><input id="partyIn" maxlength="8" placeholder="Enter party code" aria-label="Party code" autocapitalize="characters" autocomplete="off"><button id="partyJoin">Join</button></div>
+  </div>
+  <div id="partyOn" class="hide">
+    <div class="who" style="margin:0 0 4px">Party code &mdash; share it with your friends</div>
+    <div class="pcode" id="partyCode"></div>
+    <div class="pr" style="justify-content:center;margin-top:12px"><button id="partyCopy">Copy code</button><button id="partyLink">Copy invite link</button><button id="partyLeave">Leave party</button></div>
+  </div>
+  <div class="pmsg" id="partyMsg"></div>
 </div>
 
 <div class="box me">
@@ -194,20 +212,11 @@ button{color:#12002b}
 </main>
 
 <script>
-/* Standalone multiplayer: works on GitHub Pages with no server of your own.
-   Players are connected peer-to-peer (WebRTC) via the Trystero library.
-   Share a private room by adding #roomname to the link, e.g. yoursite.github.io/repo/#devan1 */
-function roomProvider(){
-  var p=null;
-  try{if(window.claude&&window.claude.use)p=window.claude.use("room")}catch(e){}
-  return Promise.resolve(p).catch(function(){return null}).then(function(r){
-    return r||fallbackRoom().catch(function(){return null});
-  });
-}
-function fallbackRoom(){
+/* Party networking: players in the same party code are connected directly (WebRTC)
+   using the free Trystero library. No server of your own needed. */
+function makeRoom(code){
   return import("https://esm.run/trystero").then(function(T){
-    var name=(location.hash.slice(1)||"lobby").slice(0,40);
-    var r=T.joinRoom({appId:"devans-arcade-v1"},name);
+    var r=T.joinRoom({appId:"devans-arcade-v1"},"party-"+code);
     var a=r.makeAction("presence"),send=a[0],get=a[1];
     var mine={},peers={},subs=[];
     function notify(){subs.forEach(function(f){try{f()}catch(e){}})}
@@ -222,12 +231,12 @@ function fallbackRoom(){
         Object.keys(peers).forEach(function(id){out.push({peer:id,kind:"viewer",isMe:false,presence:peers[id]})});
         return out;
       },
-      onPeers:function(f){subs.push(f)}
+      onPeers:function(f){subs=[f]},
+      leave:function(){subs=[];try{r.leave()}catch(e){}}
     };
   });
 }
 </script>
-
 <script>
 (function(){
   var GOAL=50, room=null;
@@ -260,7 +269,7 @@ function fallbackRoom(){
   }
   function render(){
     var ps=players();
-    $("status").textContent=room?(ps.length+(ps.length===1?" player here":" players here")):"Solo mode";
+    $("status").textContent=room?(ps.length+(ps.length===1?" player here":" players here")):"Solo mode · create or join a party";
     $("live").classList.toggle("on",!!room);
     var st=$("stack");st.textContent="";
     ps.slice(0,8).forEach(function(p){st.appendChild(avatar(p.name))});
@@ -578,15 +587,55 @@ function fallbackRoom(){
     };
   });
   render();
-  try{
-    roomProvider().then(function(r){
-      if(!r)return;
-      room=r;
-      room.presence({name:me.name,taps:me.taps,pick:me.pick}).catch(function(){});
-      room.onPeers(render,function(){});
-      render();
-    }).catch(function(){});
-  }catch(e){}
+  var party=null,curRoom=null;
+  var ALPHA="ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  function newCode(){var s="";for(var i=0;i<5;i++)s+=ALPHA[Math.floor(Math.random()*ALPHA.length)];return s}
+  function cleanCode(v){return String(v||"").toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,8)}
+  function pmsg(t){$("partyMsg").textContent=t||""}
+  function partyUI(){
+    $("partyOff").classList.toggle("hide",!!party);
+    $("partyOn").classList.toggle("hide",!party);
+    $("partyCode").textContent=party||"";
+  }
+  function inviteLink(){return location.href.split("#")[0]+"#"+party}
+  function leaveParty(quiet){
+    if(curRoom){try{curRoom.leave()}catch(e){}}
+    curRoom=null;room=null;party=null;
+    try{history.replaceState(null,"",location.href.split("#")[0])}catch(e){}
+    partyUI();if(!quiet){pmsg("");render()}
+  }
+  function joinParty(raw){
+    var code=cleanCode(raw);
+    if(code.length<4){pmsg("Type the party code first");return}
+    leaveParty(true);
+    party=code;partyUI();pmsg("Connecting…");
+    try{history.replaceState(null,"",location.href.split("#")[0]+"#"+code)}catch(e){}
+    makeRoom(code).then(function(r){
+      if(party!==code){try{r.leave()}catch(e){}return}
+      curRoom=r;room=r;
+      r.onPeers(render);
+      var snap={};for(var k in me)snap[k]=me[k];
+      r.presence(snap);
+      pmsg("");render();
+    }).catch(function(){
+      if(party!==code)return;
+      curRoom=null;room=null;party=null;partyUI();
+      pmsg("Couldn’t connect. Check your internet and try again.");render();
+    });
+  }
+  function copy(t,btn){
+    var done=function(){var o=btn.textContent;btn.textContent="Copied!";setTimeout(function(){btn.textContent=o},1200)};
+    try{navigator.clipboard.writeText(t).then(done,function(){prompt("Copy this:",t)})}catch(e){prompt("Copy this:",t)}
+  }
+  $("partyCreate").onclick=function(){joinParty(newCode())};
+  $("partyJoin").onclick=function(){joinParty($("partyIn").value)};
+  $("partyIn").onkeydown=function(e){if(e.key==="Enter")joinParty($("partyIn").value)};
+  $("partyLeave").onclick=function(){leaveParty()};
+  $("partyCopy").onclick=function(){copy(party,this)};
+  $("partyLink").onclick=function(){copy(inviteLink(),this)};
+  partyUI();
+  var h=cleanCode(location.hash.slice(1));
+  if(h.length>=4)joinParty(h);
 })();
 </script>
 </body>
