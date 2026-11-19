@@ -194,6 +194,41 @@ button{color:#12002b}
 </main>
 
 <script>
+/* Standalone multiplayer: works on GitHub Pages with no server of your own.
+   Players are connected peer-to-peer (WebRTC) via the Trystero library.
+   Share a private room by adding #roomname to the link, e.g. yoursite.github.io/repo/#devan1 */
+function roomProvider(){
+  var p=null;
+  try{if(window.claude&&window.claude.use)p=window.claude.use("room")}catch(e){}
+  return Promise.resolve(p).catch(function(){return null}).then(function(r){
+    return r||fallbackRoom().catch(function(){return null});
+  });
+}
+function fallbackRoom(){
+  return import("https://esm.run/trystero").then(function(T){
+    var name=(location.hash.slice(1)||"lobby").slice(0,40);
+    var r=T.joinRoom({appId:"devans-arcade-v1"},name);
+    var a=r.makeAction("presence"),send=a[0],get=a[1];
+    var mine={},peers={},subs=[];
+    function notify(){subs.forEach(function(f){try{f()}catch(e){}})}
+    function push(to){try{var x=send(mine,to);if(x&&x.catch)x.catch(function(){})}catch(e){}}
+    r.onPeerJoin(function(id){push(id);notify()});
+    r.onPeerLeave(function(id){delete peers[id];notify()});
+    get(function(d,id){peers[id]=d||{};notify()});
+    return{
+      presence:function(patch){for(var k in patch)mine[k]=patch[k];push();notify();return Promise.resolve()},
+      peers:function(){
+        var out=[{peer:T.selfId,kind:"viewer",isMe:true,sameTab:true,presence:mine}];
+        Object.keys(peers).forEach(function(id){out.push({peer:id,kind:"viewer",isMe:false,presence:peers[id]})});
+        return out;
+      },
+      onPeers:function(f){subs.push(f)}
+    };
+  });
+}
+</script>
+
+<script>
 (function(){
   var GOAL=50, room=null;
   var COLORS=["#c6f432","#ff9ecf","#7ad7ff","#ffd166","#b9a6ff","#8df0c2"];
@@ -544,7 +579,7 @@ button{color:#12002b}
   });
   render();
   try{
-    claude.use("room").then(function(r){
+    roomProvider().then(function(r){
       if(!r)return;
       room=r;
       room.presence({name:me.name,taps:me.taps,pick:me.pick}).catch(function(){});
